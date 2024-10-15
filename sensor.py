@@ -112,40 +112,40 @@ class _IntegrationMethod(ABC):
         return _NAME_TO_INTEGRATION_METHOD[method_name]()
 
     @abstractmethod
-    def calculate_area_with_two_states(
+    def calculate_area_with_two_values(
         self, elapsed_time: Decimal, left: Decimal, right: Decimal
     ) -> Decimal:
         """Calculate area given two states."""
 
-    def calculate_area_with_one_state(
+    def calculate_area_with_uniform_value(
         self, elapsed_time: Decimal, constant_state: Decimal
     ) -> Decimal:
         return constant_state * elapsed_time
 
 
 class _Trapezoidal(_IntegrationMethod):
-    def calculate_area_with_two_states(
+    def calculate_area_with_two_values(
         self, elapsed_time: Decimal, left: Decimal, right: Decimal
     ) -> Decimal:
         return elapsed_time * (left + right) / 2
 
 
 class _Left(_IntegrationMethod):
-    def calculate_area_with_two_states(
+    def calculate_area_with_two_values(
         self, elapsed_time: Decimal, left: Decimal, right: Decimal
     ) -> Decimal:
-        return self.calculate_area_with_one_state(elapsed_time, left)
-
+        return self.calculate_area_with_uniform_value(elapsed_time, left)
+f
 
 class _Right(_IntegrationMethod):
-    def calculate_area_with_two_states(
+    def calculate_area_with_two_values(
         self, elapsed_time: Decimal, left: Decimal, right: Decimal
     ) -> Decimal:
-        return self.calculate_area_with_one_state(elapsed_time, right)
+        return self.calculate_area_with_uniform_value(elapsed_time, right)
 
 
 
-def _decimal_state(state: str) -> Decimal | None:
+def _get_decimal_value_from_state(state: str) -> Decimal | None:
     try:
         return Decimal(state)
     except (InvalidOperation, TypeError):
@@ -453,34 +453,34 @@ class IntegrationSensor(RestoreSensor):
             async_track_state_change_event(
                 self.hass,
                 self._sensor_source_id,
-                self._integrate_on_state_change,
+                self._integrate_on_state_change_callback,
             )
         )
         self.async_on_remove(
             async_track_state_report_event(
                 self.hass,
                 self._sensor_source_id,
-                self._integrate_on_state_report,
+                self._integrate_on_state_report_callback,
             )
         )
 
     @callback
-    def _integrate_on_state_change(
+    def _integrate_on_state_change_callback(
         self, event: Event[EventStateChangedData]
     ) -> None:
         """Handle sensor state update when sub interval is configured."""
-        _LOGGER.debug("_integrate_on_state_change triggered")
+        _LOGGER.debug("_integrate_on_state_change_callback triggered")
 
         self._integrate_on_state_update(
             None, event.data["old_state"], event.data["new_state"]
         )
 
     @callback
-    def _integrate_on_state_report(
+    def _integrate_on_state_report_callback(
         self, event: Event[EventStateReportedData]
     ) -> None:
         """Handle sensor state report when sub interval is configured."""
-        _LOGGER.debug("_integrate_on_state_report triggered")
+        _LOGGER.debug("_integrate_on_state_report_callback triggered")
 
         self._integrate_on_state_update(
             event.data["old_last_reported"], None, event.data["new_state"]
@@ -533,7 +533,7 @@ class IntegrationSensor(RestoreSensor):
         start_time = self._last_integration_time
         start_value = self._last_source_value;
         end_time = new_state.last_reported
-        end_value = _decimal_state(new_state.state);
+        end_value = _get_decimal_value_from_state(new_state.state);
         
         self._update_and_save_new_total(start_time, start_value, end_time, end_value);
         
@@ -552,7 +552,7 @@ class IntegrationSensor(RestoreSensor):
                 "start_value = %s, end_value = %s", start_value, end_value
             )
 
-            area = self._method.calculate_area_with_two_states(elapsed_seconds, start_value, end_value)
+            area = self._method.calculate_area_with_two_values(elapsed_seconds, start_value, end_value)
 
             self._update_integral(area)
         else:
@@ -577,7 +577,7 @@ class IntegrationSensor(RestoreSensor):
         if (
             self._max_sub_interval is not None
             and source_state is not None
-            and (source_state_dec := _decimal_state(source_state.state))
+            and (source_state_dec := _get_decimal_value_from_state(source_state.state))
         ):
 
             @callback
