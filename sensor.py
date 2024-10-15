@@ -187,6 +187,12 @@ class IntegrationSensorExtraStoredData(SensorExtraStoredData):
     @classmethod
     def from_dict(cls, restored: dict[str, Any]) -> Self | None:
         """Initialize previous integration state from a dict."""
+
+        _LOGGER.debug(
+            "from_dict = %s", restored
+        )
+
+
         extra = SensorExtraStoredData.from_dict(restored)
         if extra is None:
             return None
@@ -327,7 +333,7 @@ class IntegrationSensor(RestoreSensor):
         self._attr_unique_id = unique_id
         self._sensor_source_id = source_entity
         self._round_digits = round_digits
-        self._integration_total: Decimal | None = None
+        self._integration_total: Decimal = 0
         self._method = _IntegrationMethod.from_name(integration_method)
 
         self._attr_name = name if name is not None else f"{source_entity} integral"
@@ -416,11 +422,7 @@ class IntegrationSensor(RestoreSensor):
         await super().async_added_to_hass()
 
         if (last_sensor_data := await self.async_get_last_sensor_data()) is not None:
-            self._integration_total = (
-                Decimal(str(last_sensor_data.native_value))
-                if last_sensor_data.native_value
-                else last_sensor_data.last_valid_total
-            )
+            self._integration_total = last_sensor_data.last_valid_total if last_sensor_data.last_valid_total is not None else 0
             self._attr_native_value = last_sensor_data.native_value
             self._unit_of_measurement = last_sensor_data.native_unit_of_measurement
             self._last_source_value = last_sensor_data.last_source_value
@@ -551,7 +553,7 @@ class IntegrationSensor(RestoreSensor):
             self._update_integral(area)
         else:
             _LOGGER.debug(
-                "skipping because no previous value %s %s", start_time, start_value
+                "Skipping because no previous value %s %s", start_time, start_value
             )
             
         
@@ -634,6 +636,7 @@ class IntegrationSensor(RestoreSensor):
         self,
     ) -> IntegrationSensorExtraStoredData | None:
         """Restore Utility Meter Sensor Extra Stored Data."""
+          
         if (restored_last_extra_data := await self.async_get_last_extra_data()) is None:
             return None
 
