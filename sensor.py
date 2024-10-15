@@ -179,24 +179,24 @@ _NAME_TO_INTEGRATION_METHOD: dict[str, type[_IntegrationMethod]] = {
 }
 
 
-class _IntegrationTrigger(Enum):
-    StateEvent = "state_event"
-    TimeElapsed = "time_elapsed"
-
 
 @dataclass
 class IntegrationSensorExtraStoredData(SensorExtraStoredData):
     """Object to hold extra stored data."""
 
     source_entity: str | None
-    last_valid_state: Decimal | None
+    last_valid_total: Decimal | None
+    last_integration_time: Decimal | None
 
     def as_dict(self) -> dict[str, Any]:
         """Return a dict representation of the utility sensor data."""
         data = super().as_dict()
         data["source_entity"] = self.source_entity
         data["last_valid_state"] = (
-            str(self.last_valid_state) if self.last_valid_state else None
+            str(self.last_valid_total) if self.last_valid_total else None
+        )
+        data["last_integration_time"] = (
+            self.last_integration_time.isoformat() if self.last_integration_time else None
         )
         return data
 
@@ -210,7 +210,7 @@ class IntegrationSensorExtraStoredData(SensorExtraStoredData):
         source_entity = restored.get(ATTR_SOURCE_ID)
 
         try:
-            last_valid_state = (
+            last_valid_total = (
                 Decimal(str(restored.get("last_valid_state")))
                 if restored.get("last_valid_state")
                 else None
@@ -219,15 +219,26 @@ class IntegrationSensorExtraStoredData(SensorExtraStoredData):
             # last_period is corrupted
             _LOGGER.error("Could not use last_valid_state")
             return None
+            
+        try:
+            last_integration_time = (
+                datetime.fromisoformat(restored.get("last_integration_time"))
+                if restored.get("last_integration_time")
+                else None
+            )
+        except (ValueError, InvalidOperation):
+            last_integration_time = None
+            pass
 
-        if last_valid_state is None:
+        if last_valid_total is None:
             return None
 
         return cls(
             extra.native_value,
             extra.native_unit_of_measurement,
             source_entity,
-            last_valid_state,
+            last_valid_total,
+            last_integration_time
         )
 
 
@@ -320,7 +331,7 @@ class IntegrationSensor(RestoreSensor):
         self._attr_unique_id = unique_id
         self._sensor_source_id = source_entity
         self._round_digits = round_digits
-        self._state: Decimal | None = None
+        self._integration_total: Decimal | None = None
         self._method = _IntegrationMethod.from_name(integration_method)
 
         self._attr_name = name if name is not None else f"{source_entity} integral"
@@ -331,7 +342,7 @@ class IntegrationSensor(RestoreSensor):
         self._unit_time_str = unit_time
         self._attr_icon = "mdi:chart-histogram"
         self._source_entity: str = source_entity
-        self._last_valid_state: Decimal | None = None
+        self._last_valid_total: Decimal | None = None
         self._attr_device_info = device_info
         self._max_sub_interval: timedelta | None = (
             None  # disable time based integration
@@ -340,7 +351,6 @@ class IntegrationSensor(RestoreSensor):
         )
         self._max_sub_interval_exceeded_callback: CALLBACK_TYPE = lambda *args: None
         self._last_integration_time: datetime = datetime.now(tz=UTC)
-        self._last_integration_trigger = _IntegrationTrigger.StateEvent
         self._attr_suggested_display_precision = round_digits or 2
 
     def _calculate_unit(self, source_unit: str) -> str:
@@ -397,33 +407,41 @@ class IntegrationSensor(RestoreSensor):
 
     def _update_integral(self, area: Decimal) -> None:
         area_scaled = area / (self._unit_prefix * self._unit_time)
-        if isinstance(self._state, Decimal):
-            self._state += area_scaled
+        if isinstance(self._integration_total, Decimal):
+            self._integration_total += area_scaled
         else:
-            self._state = area_scaled
+            self._integration_total = area_scaled
         _LOGGER.debug(
-            "area = %s, area_scaled = %s new state = %s", area, area_scaled, self._state
+            "area = %s, area_scaled = %s new total = %s", area, area_scaled, self._integration_total
         )
-        self._last_valid_state = self._state
+        self._last_valid_total = self._integration_total
 
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
         await super().async_added_to_hass()
 
         if (last_sensor_data := await self.async_get_last_sensor_data()) is not None:
-            self._state = (
+            self._integration_total = (
                 Decimal(str(last_sensor_data.native_value))
                 if last_sensor_data.native_value
-                else last_sensor_data.last_valid_state
+                else last_sensor_data.last_valid_total
             )
             self._attr_native_value = last_sensor_data.native_value
             self._unit_of_measurement = last_sensor_data.native_unit_of_measurement
-            self._last_valid_state = last_sensor_data.last_valid_state
+            self._last_valid_total = last_sensor_data.last_valid_total
+            
+            # Restore last integration time as long as it is in the past
+            if last_sensor_data.last_integration_time is not None and last_sensor_data.last_integration_time < self._last_integration_time:
+                self._last_integration_time = last_sensor_data.last_integration_time
+                _LOGGER.debug(
+                     "Restored _last_integration_time %s",
+                     self._last_integration_time
+                )
 
             _LOGGER.debug(
-                "Restored state %s and last_valid_state %s",
-                self._state,
-                self._last_valid_state,
+                "Restored total %s and last_valid_total %s",
+                self._integration_total,
+                self._last_valid_total,
             )
 
         if self._max_sub_interval is not None:
@@ -495,7 +513,6 @@ class IntegrationSensor(RestoreSensor):
         self._cancel_max_sub_interval_exceeded_callback()
         try:
             self._integrate_on_state_change(old_last_reported, old_state, new_state)
-            self._last_integration_trigger = _IntegrationTrigger.StateEvent
             self._last_integration_time = datetime.now(tz=UTC)
         finally:
             # When max_sub_interval exceeds without state change the source is assumed
@@ -569,9 +586,9 @@ class IntegrationSensor(RestoreSensor):
 
         end_time = new_state.last_reported
         
-        self._calculate_and_save_new_state(start_time, start_state, end_time, end_state);
+        self._update_and_save_new_total(start_time, start_state, end_time, end_state);
         
-    def _calculate_and_save_new_state(start_time, start_state, end_time, end_state):
+    def _update_and_save_new_total(self, start_time, start_state, end_time, end_state):
 
         self._last_integration_time = end_time
 
@@ -581,7 +598,7 @@ class IntegrationSensor(RestoreSensor):
             "start_time = %s, end_time = %s, elapsed_seconds = %s", start_time, end_time, elapsed_seconds
         )
 
-        area = self._method.calculate_area_with_two_states(elapsed_seconds, (start_state, end_state))
+        area = self._method.calculate_area_with_two_states(elapsed_seconds, start_state, end_state)
 
         self._update_integral(area)
         self.async_write_ha_state()
@@ -612,9 +629,7 @@ class IntegrationSensor(RestoreSensor):
                 start_time = self._last_integration_time
                 end_time = now
                 
-                self._calculate_and_save_new_state(start_time, source_state_dec, end_time, source_state_dec)
-
-                self._last_integration_trigger = _IntegrationTrigger.TimeElapsed
+                self._update_and_save_new_total(start_time, source_state_dec, end_time, source_state_dec)
 
                 self._schedule_max_sub_interval_exceeded_if_state_is_numeric(
                     source_state
@@ -631,10 +646,10 @@ class IntegrationSensor(RestoreSensor):
 
     @property
     def native_value(self) -> Decimal | None:
-        """Return the state of the sensor."""
-        if isinstance(self._state, Decimal) and self._round_digits:
-            return round(self._state, self._round_digits)
-        return self._state
+        """Return the value of the sensor."""
+        if isinstance(self._integration_total, Decimal) and self._round_digits:
+            return round(self._integration_total, self._round_digits)
+        return self._integration_total
 
     @property
     def native_unit_of_measurement(self) -> str | None:
@@ -651,11 +666,13 @@ class IntegrationSensor(RestoreSensor):
     @property
     def extra_restore_state_data(self) -> IntegrationSensorExtraStoredData:
         """Return sensor specific state data to be restored."""
+        
         return IntegrationSensorExtraStoredData(
             self.native_value,
             self.native_unit_of_measurement,
             self._source_entity,
-            self._last_valid_state,
+            self._last_valid_total,
+            self._last_integration_time
         )
 
     async def async_get_last_sensor_data(
