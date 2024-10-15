@@ -342,7 +342,6 @@ class IntegrationSensor(RestoreSensor):
         self._unit_time_str = unit_time
         self._attr_icon = "mdi:chart-histogram"
         self._source_entity: str = source_entity
-        self._last_valid_total: Decimal | None = None
         self._attr_device_info = device_info
         self._max_sub_interval: timedelta | None = (
             None  # disable time based integration
@@ -414,7 +413,6 @@ class IntegrationSensor(RestoreSensor):
         _LOGGER.debug(
             "area = %s, area_scaled = %s new total = %s", area, area_scaled, self._integration_total
         )
-        self._last_valid_total = self._integration_total
 
     async def async_added_to_hass(self) -> None:
         """Handle entity which will be added."""
@@ -428,7 +426,6 @@ class IntegrationSensor(RestoreSensor):
             )
             self._attr_native_value = last_sensor_data.native_value
             self._unit_of_measurement = last_sensor_data.native_unit_of_measurement
-            self._last_valid_total = last_sensor_data.last_valid_total
             
             # Restore last integration time as long as it is in the past
             if last_sensor_data.last_integration_time is not None and last_sensor_data.last_integration_time < self._last_integration_time:
@@ -439,9 +436,8 @@ class IntegrationSensor(RestoreSensor):
                 )
 
             _LOGGER.debug(
-                "Restored total %s and last_valid_total %s",
+                "Restored total %s",
                 self._integration_total,
-                self._last_valid_total,
             )
 
         if self._max_sub_interval is not None:
@@ -671,7 +667,7 @@ class IntegrationSensor(RestoreSensor):
             self.native_value,
             self.native_unit_of_measurement,
             self._source_entity,
-            self._last_valid_total,
+            self._integration_total,
             self._last_integration_time
         )
 
