@@ -559,13 +559,19 @@ class IntegrationSensor(RestoreSensor):
         ):
             self.async_write_ha_state()
             return
+            
+        (state_state, end_state) = states;
 
         if TYPE_CHECKING:
             assert old_last_reported is not None
-
+            
         start_time = self._last_integration_time
 
         end_time = new_state.last_reported
+        
+        self._calculate_and_save_new_state(start_time, start_state, end_time, end_state);
+        
+    def _calculate_and_save_new_state(start_time, start_state, end_time, end_state):
 
         self._last_integration_time = end_time
 
@@ -575,7 +581,7 @@ class IntegrationSensor(RestoreSensor):
             "start_time = %s, end_time = %s, elapsed_seconds = %s", start_time, end_time, elapsed_seconds
         )
 
-        area = self._method.calculate_area_with_two_states(elapsed_seconds, *states)
+        area = self._method.calculate_area_with_two_states(elapsed_seconds, (start_state, end_state))
 
         self._update_integral(area)
         self.async_write_ha_state()
@@ -601,23 +607,13 @@ class IntegrationSensor(RestoreSensor):
             def _integrate_on_max_sub_interval_exceeded_callback(now: datetime) -> None:
                 """Integrate based on time and reschedule."""
 
+                self._derive_and_set_attributes_from_state(source_state)
+
                 start_time = self._last_integration_time
                 end_time = now
+                
+                self._calculate_and_save_new_state(start_time, source_state_dec, end_time, source_state_dec)
 
-                elapsed_seconds = Decimal((end_time - start_time).total_seconds())
-
-                _LOGGER.debug(
-                    "start_time = %s, end_time = %s, elapsed_seconds = %s", start_time, end_time, elapsed_seconds
-                )
-
-                self._derive_and_set_attributes_from_state(source_state)
-                area = self._method.calculate_area_with_one_state(
-                    elapsed_seconds, source_state_dec
-                )
-                self._update_integral(area)
-                self.async_write_ha_state()
-
-                self._last_integration_time = datetime.now(tz=UTC)
                 self._last_integration_trigger = _IntegrationTrigger.TimeElapsed
 
                 self._schedule_max_sub_interval_exceeded_if_state_is_numeric(
