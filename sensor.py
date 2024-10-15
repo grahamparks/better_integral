@@ -115,12 +115,12 @@ class _IntegrationMethod(ABC):
     def calculate_area_with_two_values(
         self, elapsed_time: Decimal, left: Decimal, right: Decimal
     ) -> Decimal:
-        """Calculate area given two states."""
+        """Calculate area given two values."""
 
     def calculate_area_with_uniform_value(
-        self, elapsed_time: Decimal, constant_state: Decimal
+        self, elapsed_time: Decimal, uniform_value: Decimal
     ) -> Decimal:
-        return constant_state * elapsed_time
+        return uniform_value * elapsed_time
 
 
 class _Trapezoidal(_IntegrationMethod):
@@ -135,7 +135,7 @@ class _Left(_IntegrationMethod):
         self, elapsed_time: Decimal, left: Decimal, right: Decimal
     ) -> Decimal:
         return self.calculate_area_with_uniform_value(elapsed_time, left)
-f
+
 
 class _Right(_IntegrationMethod):
     def calculate_area_with_two_values(
@@ -186,7 +186,7 @@ class IntegrationSensorExtraStoredData(SensorExtraStoredData):
 
     @classmethod
     def from_dict(cls, restored: dict[str, Any]) -> Self | None:
-        """Initialize a stored sensor state from a dict."""
+        """Initialize previous integration state from a dict."""
         extra = SensorExtraStoredData.from_dict(restored)
         if extra is None:
             return None
@@ -438,6 +438,8 @@ class IntegrationSensor(RestoreSensor):
                 self._integration_total,
                 self._last_source_value
             )
+        else:
+            _LOGGER.debug("Unable to restore previous data")
 
         if self._max_sub_interval is not None:
             source_state = self.hass.states.get(self._sensor_source_id)
@@ -471,9 +473,7 @@ class IntegrationSensor(RestoreSensor):
         """Handle sensor state update when sub interval is configured."""
         _LOGGER.debug("_integrate_on_state_change_callback triggered")
 
-        self._integrate_on_state_update(
-            None, event.data["old_state"], event.data["new_state"]
-        )
+        self._integrate_on_state_update(event.data["new_state"])
 
     @callback
     def _integrate_on_state_report_callback(
@@ -482,15 +482,11 @@ class IntegrationSensor(RestoreSensor):
         """Handle sensor state report when sub interval is configured."""
         _LOGGER.debug("_integrate_on_state_report_callback triggered")
 
-        self._integrate_on_state_update(
-            event.data["old_last_reported"], None, event.data["new_state"]
-        )
+        self._integrate_on_state_update(event.data["new_state"])
 
     @callback
     def _integrate_on_state_update(
         self,
-        old_last_reported: datetime | None,
-        old_state: State | None,
         new_state: State | None,
     ) -> None:
         """Integrate based on state change and time.
@@ -504,7 +500,7 @@ class IntegrationSensor(RestoreSensor):
             self._cancel_max_sub_interval_exceeded_callback()
     
         try:
-            self._integrate_on_state_change(old_last_reported, old_state, new_state)
+            self._integrate_on_state_change(new_state)
             self._last_integration_time = datetime.now(tz=UTC)
         finally:
             if self._max_sub_interval is not None:
@@ -514,8 +510,6 @@ class IntegrationSensor(RestoreSensor):
 
     def _integrate_on_state_change(
         self,
-        old_last_reported: datetime | None,
-        old_state: State | None,
         new_state: State | None,
     ) -> None:
 
