@@ -461,6 +461,8 @@ class IntegrationSensor(RestoreSensor):
         self, event: Event[EventStateChangedData]
     ) -> None:
         """Handle sensor state update when sub interval is configured."""
+        _LOGGER.debug("_integrate_on_state_change_with_max_sub_interval triggered")
+
         self._integrate_on_state_update_with_max_sub_interval(
             None, event.data["old_state"], event.data["new_state"]
         )
@@ -470,6 +472,8 @@ class IntegrationSensor(RestoreSensor):
         self, event: Event[EventStateReportedData]
     ) -> None:
         """Handle sensor state report when sub interval is configured."""
+        _LOGGER.debug("_integrate_on_state_report_with_max_sub_interval triggered")
+
         self._integrate_on_state_update_with_max_sub_interval(
             event.data["old_last_reported"], None, event.data["new_state"]
         )
@@ -486,6 +490,8 @@ class IntegrationSensor(RestoreSensor):
         Next to doing the integration based on state change this method cancels and
         reschedules time based integration.
         """
+        _LOGGER.debug("_integrate_on_state_update_with_max_sub_interval triggered")
+
         self._cancel_max_sub_interval_exceeded_callback()
         try:
             self._integrate_on_state_change(old_last_reported, old_state, new_state)
@@ -501,6 +507,8 @@ class IntegrationSensor(RestoreSensor):
         self, event: Event[EventStateChangedData]
     ) -> None:
         """Handle sensor state change."""
+        _LOGGER.debug("_integrate_on_state_change_callback triggered")
+
         return self._integrate_on_state_change(
             None, event.data["old_state"], event.data["new_state"]
         )
@@ -510,6 +518,8 @@ class IntegrationSensor(RestoreSensor):
         self, event: Event[EventStateReportedData]
     ) -> None:
         """Handle sensor state report."""
+        _LOGGER.debug("_integrate_on_state_report_callback triggered")
+
         return self._integrate_on_state_change(
             event.data["old_last_reported"], None, event.data["new_state"]
         )
@@ -520,6 +530,7 @@ class IntegrationSensor(RestoreSensor):
         old_state: State | None,
         new_state: State | None,
     ) -> None:
+
         if new_state is None:
             return
 
@@ -528,7 +539,7 @@ class IntegrationSensor(RestoreSensor):
             self.async_write_ha_state()
             return
 
-        if old_state:
+        if old_state and not old_state.state == STATE_UNAVAILABLE:
             # state has changed, we recover old_state from the event
             old_state_state = old_state.state
             old_last_reported = old_state.last_reported
@@ -551,10 +562,17 @@ class IntegrationSensor(RestoreSensor):
 
         if TYPE_CHECKING:
             assert old_last_reported is not None
-        elapsed_seconds = Decimal(
-            (new_state.last_reported - old_last_reported).total_seconds()
-            if self._last_integration_trigger == _IntegrationTrigger.StateEvent
-            else (new_state.last_reported - self._last_integration_time).total_seconds()
+
+        start_time = self._last_integration_time
+
+        end_time = new_state.last_reported
+
+        self._last_integration_time = end_time
+
+        elapsed_seconds = Decimal((end_time - start_time).total_seconds())
+
+        _LOGGER.debug(
+            "start_time = %s, end_time = %s, elapsed_seconds = %s", start_time, end_time, elapsed_seconds
         )
 
         area = self._method.calculate_area_with_two_states(elapsed_seconds, *states)
@@ -582,9 +600,16 @@ class IntegrationSensor(RestoreSensor):
             @callback
             def _integrate_on_max_sub_interval_exceeded_callback(now: datetime) -> None:
                 """Integrate based on time and reschedule."""
-                elapsed_seconds = Decimal(
-                    (now - self._last_integration_time).total_seconds()
+
+                start_time = self._last_integration_time
+                end_time = now
+
+                elapsed_seconds = Decimal((end_time - start_time).total_seconds())
+
+                _LOGGER.debug(
+                    "start_time = %s, end_time = %s, elapsed_seconds = %s", start_time, end_time, elapsed_seconds
                 )
+
                 self._derive_and_set_attributes_from_state(source_state)
                 area = self._method.calculate_area_with_one_state(
                     elapsed_seconds, source_state_dec
