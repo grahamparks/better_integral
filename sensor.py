@@ -443,11 +443,6 @@ class IntegrationSensor(RestoreSensor):
             source_state = self.hass.states.get(self._sensor_source_id)
             self._schedule_max_sub_interval_exceeded_if_state_is_numeric(source_state)
             self.async_on_remove(self._cancel_max_sub_interval_exceeded_callback)
-            handle_state_change = self._integrate_on_state_change_with_max_sub_interval
-            handle_state_report = self._integrate_on_state_report_with_max_sub_interval
-        else:
-            handle_state_change = self._integrate_on_state_change_callback
-            handle_state_report = self._integrate_on_state_report_callback
 
         if (
             state := self.hass.states.get(self._source_entity)
@@ -458,41 +453,41 @@ class IntegrationSensor(RestoreSensor):
             async_track_state_change_event(
                 self.hass,
                 self._sensor_source_id,
-                handle_state_change,
+                self._integrate_on_state_change,
             )
         )
         self.async_on_remove(
             async_track_state_report_event(
                 self.hass,
                 self._sensor_source_id,
-                handle_state_report,
+                self._integrate_on_state_report,
             )
         )
 
     @callback
-    def _integrate_on_state_change_with_max_sub_interval(
+    def _integrate_on_state_change(
         self, event: Event[EventStateChangedData]
     ) -> None:
         """Handle sensor state update when sub interval is configured."""
-        _LOGGER.debug("_integrate_on_state_change_with_max_sub_interval triggered")
+        _LOGGER.debug("_integrate_on_state_change triggered")
 
-        self._integrate_on_state_update_with_max_sub_interval(
+        self._integrate_on_state_update(
             None, event.data["old_state"], event.data["new_state"]
         )
 
     @callback
-    def _integrate_on_state_report_with_max_sub_interval(
+    def _integrate_on_state_report(
         self, event: Event[EventStateReportedData]
     ) -> None:
         """Handle sensor state report when sub interval is configured."""
-        _LOGGER.debug("_integrate_on_state_report_with_max_sub_interval triggered")
+        _LOGGER.debug("_integrate_on_state_report triggered")
 
-        self._integrate_on_state_update_with_max_sub_interval(
+        self._integrate_on_state_update(
             event.data["old_last_reported"], None, event.data["new_state"]
         )
 
     @callback
-    def _integrate_on_state_update_with_max_sub_interval(
+    def _integrate_on_state_update(
         self,
         old_last_reported: datetime | None,
         old_state: State | None,
@@ -503,38 +498,19 @@ class IntegrationSensor(RestoreSensor):
         Next to doing the integration based on state change this method cancels and
         reschedules time based integration.
         """
-        _LOGGER.debug("_integrate_on_state_update_with_max_sub_interval triggered")
+        _LOGGER.debug("_integrate_on_state_update triggered")
 
-        self._cancel_max_sub_interval_exceeded_callback()
+        if self._max_sub_interval is not None:
+            self._cancel_max_sub_interval_exceeded_callback()
+    
         try:
             self._integrate_on_state_change(old_last_reported, old_state, new_state)
             self._last_integration_time = datetime.now(tz=UTC)
         finally:
-            # When max_sub_interval exceeds without state change the source is assumed
-            # constant with the last known state (new_state).
-            self._schedule_max_sub_interval_exceeded_if_state_is_numeric(new_state)
-
-    @callback
-    def _integrate_on_state_change_callback(
-        self, event: Event[EventStateChangedData]
-    ) -> None:
-        """Handle sensor state change."""
-        _LOGGER.debug("_integrate_on_state_change_callback triggered")
-
-        return self._integrate_on_state_change(
-            None, event.data["old_state"], event.data["new_state"]
-        )
-
-    @callback
-    def _integrate_on_state_report_callback(
-        self, event: Event[EventStateReportedData]
-    ) -> None:
-        """Handle sensor state report."""
-        _LOGGER.debug("_integrate_on_state_report_callback triggered")
-
-        return self._integrate_on_state_change(
-            event.data["old_last_reported"], None, event.data["new_state"]
-        )
+            if self._max_sub_interval is not None:
+                # When max_sub_interval exceeds without state change the source is assumed
+                # constant with the last known state (new_state).
+                self._schedule_max_sub_interval_exceeded_if_state_is_numeric(new_state)
 
     def _integrate_on_state_change(
         self,
