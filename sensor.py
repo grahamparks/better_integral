@@ -112,10 +112,6 @@ class _IntegrationMethod(ABC):
         return _NAME_TO_INTEGRATION_METHOD[method_name]()
 
     @abstractmethod
-    def validate_states(self, left: str, right: str) -> tuple[Decimal, Decimal] | None:
-        """Check state requirements for integration."""
-
-    @abstractmethod
     def calculate_area_with_two_states(
         self, elapsed_time: Decimal, left: Decimal, right: Decimal
     ) -> Decimal:
@@ -133,24 +129,12 @@ class _Trapezoidal(_IntegrationMethod):
     ) -> Decimal:
         return elapsed_time * (left + right) / 2
 
-    def validate_states(self, left: str, right: str) -> tuple[Decimal, Decimal] | None:
-        if (left_dec := _decimal_state(left)) is None or (
-            right_dec := _decimal_state(right)
-        ) is None:
-            return None
-        return (left_dec, right_dec)
-
 
 class _Left(_IntegrationMethod):
     def calculate_area_with_two_states(
         self, elapsed_time: Decimal, left: Decimal, right: Decimal
     ) -> Decimal:
         return self.calculate_area_with_one_state(elapsed_time, left)
-
-    def validate_states(self, left: str, right: str) -> tuple[Decimal, Decimal] | None:
-        if (left_dec := _decimal_state(left)) is None:
-            return None
-        return (left_dec, left_dec)
 
 
 class _Right(_IntegrationMethod):
@@ -159,10 +143,6 @@ class _Right(_IntegrationMethod):
     ) -> Decimal:
         return self.calculate_area_with_one_state(elapsed_time, right)
 
-    def validate_states(self, left: str, right: str) -> tuple[Decimal, Decimal] | None:
-        if (right_dec := _decimal_state(right)) is None:
-            return None
-        return (right_dec, right_dec)
 
 
 def _decimal_state(state: str) -> Decimal | None:
@@ -187,6 +167,7 @@ class IntegrationSensorExtraStoredData(SensorExtraStoredData):
     source_entity: str | None
     last_valid_total: Decimal | None
     last_integration_time: Decimal | None
+    last_source_value: Decimal | None
 
     def as_dict(self) -> dict[str, Any]:
         """Return a dict representation of the utility sensor data."""
@@ -197,6 +178,9 @@ class IntegrationSensorExtraStoredData(SensorExtraStoredData):
         )
         data["last_integration_time"] = (
             self.last_integration_time.isoformat() if self.last_integration_time else None
+        )
+        data["last_source_value"] = (
+            str(self.last_source_value) if self.last_source_value else None
         )
         return data
 
@@ -219,6 +203,10 @@ class IntegrationSensorExtraStoredData(SensorExtraStoredData):
             # last_period is corrupted
             _LOGGER.error("Could not use last_valid_state")
             return None
+
+        if last_valid_total is None:
+            return None
+
             
         try:
             last_integration_time = (
@@ -230,15 +218,23 @@ class IntegrationSensorExtraStoredData(SensorExtraStoredData):
             last_integration_time = None
             pass
 
-        if last_valid_total is None:
-            return None
+        try:
+            last_source_value = (
+                Decimal(str(restored.get("last_source_value")))
+                if restored.get("last_source_value")
+                else None
+            )
+        except (ValueError, InvalidOperation):
+            last_source_value = None
+            pass
 
         return cls(
             extra.native_value,
             extra.native_unit_of_measurement,
             source_entity,
             last_valid_total,
-            last_integration_time
+            last_integration_time,
+            last_source_value
         )
 
 
@@ -350,6 +346,7 @@ class IntegrationSensor(RestoreSensor):
         )
         self._max_sub_interval_exceeded_callback: CALLBACK_TYPE = lambda *args: None
         self._last_integration_time: datetime = datetime.now(tz=UTC)
+        self._last_source_value: Decimal | None = None
         self._attr_suggested_display_precision = round_digits or 2
 
     def _calculate_unit(self, source_unit: str) -> str:
@@ -426,6 +423,7 @@ class IntegrationSensor(RestoreSensor):
             )
             self._attr_native_value = last_sensor_data.native_value
             self._unit_of_measurement = last_sensor_data.native_unit_of_measurement
+            self._last_source_value = last_sensor_data.last_source_value
             
             # Restore last integration time as long as it is in the past
             if last_sensor_data.last_integration_time is not None and last_sensor_data.last_integration_time < self._last_integration_time:
@@ -436,8 +434,9 @@ class IntegrationSensor(RestoreSensor):
                 )
 
             _LOGGER.debug(
-                "Restored total %s",
+                "Restored total %s and last value %s",
                 self._integration_total,
+                self._last_source_value
             )
 
         if self._max_sub_interval is not None:
@@ -552,51 +551,40 @@ class IntegrationSensor(RestoreSensor):
             self.async_write_ha_state()
             return
 
-        if old_state and not old_state.state == STATE_UNAVAILABLE:
-            # state has changed, we recover old_state from the event
-            old_state_state = old_state.state
-            old_last_reported = old_state.last_reported
-        else:
-            # event state reported without any state change
-            old_state_state = new_state.state
-
         self._attr_available = True
         self._derive_and_set_attributes_from_state(new_state)
-
-        if old_last_reported is None and old_state is None:
-            self.async_write_ha_state()
-            return
-
-        if not (
-            states := self._method.validate_states(old_state_state, new_state.state)
-        ):
-            self.async_write_ha_state()
-            return
-            
-        (start_state, end_state) = states;
-
-        if TYPE_CHECKING:
-            assert old_last_reported is not None
-            
+        
         start_time = self._last_integration_time
-
+        start_value = self._last_source_value;
         end_time = new_state.last_reported
+        end_value = _decimal_state(new_state.state);
         
-        self._update_and_save_new_total(start_time, start_state, end_time, end_state);
+        self._update_and_save_new_total(start_time, start_value, end_time, end_value);
         
-    def _update_and_save_new_total(self, start_time, start_state, end_time, end_state):
+    def _update_and_save_new_total(self, start_time, start_value, end_time, end_value):
 
         self._last_integration_time = end_time
+        self._last_source_value = end_value
 
-        elapsed_seconds = Decimal((end_time - start_time).total_seconds())
+        if start_time is not None and start_value is not None:
+            elapsed_seconds = Decimal((end_time - start_time).total_seconds())
+        
+            _LOGGER.debug(
+                "start_time = %s, end_time = %s, elapsed_seconds = %s", start_time, end_time, elapsed_seconds
+            )
+            _LOGGER.debug(
+                "start_value = %s, end_value = %s", start_value, end_value
+            )
 
-        _LOGGER.debug(
-            "start_time = %s, end_time = %s, elapsed_seconds = %s", start_time, end_time, elapsed_seconds
-        )
+            area = self._method.calculate_area_with_two_states(elapsed_seconds, start_value, end_value)
 
-        area = self._method.calculate_area_with_two_states(elapsed_seconds, start_state, end_state)
-
-        self._update_integral(area)
+            self._update_integral(area)
+        else:
+            _LOGGER.debug(
+                "skipping because no previous value %s %s", start_time, start_value
+            )
+            
+        
         self.async_write_ha_state()
 
     def _schedule_max_sub_interval_exceeded_if_state_is_numeric(
@@ -668,7 +656,8 @@ class IntegrationSensor(RestoreSensor):
             self.native_unit_of_measurement,
             self._source_entity,
             self._integration_total,
-            self._last_integration_time
+            self._last_integration_time,
+            self._last_source_value
         )
 
     async def async_get_last_sensor_data(
