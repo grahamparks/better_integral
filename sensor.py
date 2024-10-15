@@ -560,7 +560,7 @@ class IntegrationSensor(RestoreSensor):
             self.async_write_ha_state()
             return
             
-        (state_state, end_state) = states;
+        (start_state, end_state) = states;
 
         if TYPE_CHECKING:
             assert old_last_reported is not None
