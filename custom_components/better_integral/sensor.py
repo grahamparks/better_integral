@@ -473,7 +473,7 @@ class IntegrationSensor(RestoreSensor):
         self, event: Event[EventStateChangedData]
     ) -> None:
         """Handle sensor state update when sub interval is configured."""
-        _LOGGER.debug("_integrate_on_state_change_callback triggered")
+        _LOGGER.debug("_integrate_on_state_change_callback triggered %s", self._sensor_source_id)
 
         self._integrate_on_state_update(event.data["new_state"])
 
@@ -482,11 +482,10 @@ class IntegrationSensor(RestoreSensor):
         self, event: Event[EventStateReportedData]
     ) -> None:
         """Handle sensor state report when sub interval is configured."""
-        _LOGGER.debug("_integrate_on_state_report_callback triggered")
+        _LOGGER.debug("_integrate_on_state_report_callback triggered %s", self._sensor_source_id)
 
         self._integrate_on_state_update(event.data["new_state"])
 
-    @callback
     def _integrate_on_state_update(
         self,
         new_state: State | None,
@@ -496,32 +495,35 @@ class IntegrationSensor(RestoreSensor):
         Next to doing the integration based on state change this method cancels and
         reschedules time based integration.
         """
-        _LOGGER.debug("_integrate_on_state_update triggered")
 
         if self._max_sub_interval is not None:
             self._cancel_max_sub_interval_exceeded_callback()
-    
+
         try:
             self._integrate_on_state_change(new_state)
-            self._last_integration_time = datetime.now(tz=UTC)
+        except e:
+            _LOGGER.error("Error integrating %s", e)
         finally:
             if self._max_sub_interval is not None:
                 # When max_sub_interval exceeds without state change the source is assumed
                 # constant with the last known state (new_state).
                 self._schedule_max_sub_interval_exceeded_if_state_is_numeric(new_state)
-
+        
     def _integrate_on_state_change(
         self,
         new_state: State | None,
     ) -> None:
 
         if new_state is None:
+            _LOGGER.debug("Skipping as sensor state is missing")
             return
 
         if new_state.state == STATE_UNAVAILABLE:
+            _LOGGER.debug("Skipping as sensor is unavailable")
             self._attr_available = False
             self.async_write_ha_state()
             return
+
 
         self._attr_available = True
         self._derive_and_set_attributes_from_state(new_state)
@@ -530,7 +532,7 @@ class IntegrationSensor(RestoreSensor):
         start_value = self._last_source_value;
         end_time = new_state.last_reported
         end_value = _get_decimal_value_from_state(new_state.state);
-        
+
         self._update_and_save_new_total(start_time, start_value, end_time, end_value);
         
     def _update_and_save_new_total(self, start_time, start_value, end_time, end_value):
@@ -542,10 +544,10 @@ class IntegrationSensor(RestoreSensor):
             elapsed_seconds = Decimal((end_time - start_time).total_seconds())
         
             _LOGGER.debug(
-                "start_time = %s, end_time = %s, elapsed_seconds = %s", start_time, end_time, elapsed_seconds
+                "start_time = %s, end_time = %s", start_time, end_time
             )
             _LOGGER.debug(
-                "start_value = %s, end_value = %s", start_value, end_value
+                "start_value = %s, end_value = %s, elapsed_seconds = %s", start_value, end_value, elapsed_seconds
             )
 
             area = self._method.calculate_area_with_two_values(elapsed_seconds, start_value, end_value)
